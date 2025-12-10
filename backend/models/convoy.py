@@ -40,10 +40,6 @@ class Vehicle(BaseModel):
     id: Optional[int] = None
     vehicle_type: VehicleType
     registration_number: str
-    source_lat: float
-    source_lon: float
-    destination_lat: float
-    destination_lon: float
     load_type: LoadType
     load_weight_kg: float
     capacity_kg: int

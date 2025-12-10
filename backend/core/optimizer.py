@@ -15,12 +15,11 @@ def optimize_convoy_route(convoy: Convoy) -> Route:
     if not convoy.vehicles:
         raise ValueError("Convoy has no vehicles")
 
-    # Use first vehicle's start/end for demo
-    first_vehicle = convoy.vehicles[0]
-    start_lat = first_vehicle.source_lat
-    start_lon = first_vehicle.source_lon
-    end_lat = first_vehicle.destination_lat
-    end_lon = first_vehicle.destination_lon
+    # Use convoy's start/end (vehicles inherit these from convoy)
+    start_lat = convoy.source_lat
+    start_lon = convoy.source_lon
+    end_lat = convoy.destination_lat
+    end_lon = convoy.destination_lon
 
     # Get route from OSRM
     coords = f"{start_lon},{start_lat};{end_lon},{end_lat}"

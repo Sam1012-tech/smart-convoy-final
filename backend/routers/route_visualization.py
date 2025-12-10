@@ -148,13 +148,18 @@ def optimize_convoy_route(convoy_id: int):
     """
     from routers.convoy_routes import convoys_db
 
-    if convoy_id not in convoys_db:
+    # Find convoy by ID (convoys_db uses convoy_name as key)
+    convoy = None
+    for c in convoys_db.values():
+        if c.id == convoy_id:
+            convoy = c
+            break
+
+    if not convoy:
         return JSONResponse(
             {"status": "error", "message": "Convoy not found"},
             status_code=404
         )
-
-    convoy = convoys_db[convoy_id]
 
     # Get route for convoy
     result = get_route(
@@ -207,10 +212,15 @@ def multi_convoy_routes(convoy_ids: str = Query(..., description="Comma-separate
     routes = []
 
     for convoy_id in ids:
-        if convoy_id not in convoys_db:
-            continue
+        # Find convoy by ID (convoys_db uses convoy_name as key)
+        convoy = None
+        for c in convoys_db.values():
+            if c.id == convoy_id:
+                convoy = c
+                break
 
-        convoy = convoys_db[convoy_id]
+        if not convoy:
+            continue
 
         try:
             # Get route

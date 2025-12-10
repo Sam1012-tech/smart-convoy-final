@@ -9,15 +9,20 @@ from typing import Dict
 
 router = APIRouter()
 
-# In-memory storage
-convoys_db: Dict[int, Convoy] = {}
-convoy_counter = 0
+# In-memory storage (your teammate will replace this with real database)
+convoys_db: Dict[str, Convoy] = {}  # Key: convoy_name, Value: Convoy
+convoy_id_counter = 0
 
 
 @router.post("/create")
 def create_convoy(convoy: Convoy):
     """
-    Create a new convoy.
+    Create a new convoy or add vehicles to existing convoy.
+
+    If a convoy with the same name exists, vehicles will be added to it.
+    Otherwise, a new convoy will be created.
+
+    NOTE: Vehicles automatically inherit source/destination from convoy.
 
     Example JSON:
     {
@@ -31,10 +36,6 @@ def create_convoy(convoy: Convoy):
         {
           "vehicle_type": "truck",
           "registration_number": "DL-01-AB-1234",
-          "source_lat": 28.6139,
-          "source_lon": 77.2090,
-          "destination_lat": 28.4595,
-          "destination_lon": 77.0266,
           "load_type": "medical",
           "load_weight_kg": 500,
           "capacity_kg": 1000,
@@ -43,15 +44,102 @@ def create_convoy(convoy: Convoy):
       ]
     }
     """
-    global convoy_counter
+    global convoy_id_counter
 
     try:
-        # Assign ID
-        convoy_counter += 1
-        convoy.id = convoy_counter
+        # Check if convoy with same name exists
+        if convoy.convoy_name in convoys_db:
+            existing_convoy = convoys_db[convoy.convoy_name]
 
-        # Store convoy
-        convoys_db[convoy.id] = convoy
+            # Check for duplicate vehicle registrations
+            existing_registrations = {v.registration_number for v in existing_convoy.vehicles}
+            for vehicle in convoy.vehicles:
+                if vehicle.registration_number in existing_registrations:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Vehicle with registration {vehicle.registration_number} already exists in convoy"
+                    )
+
+            # Add new vehicles to existing convoy
+            new_vehicle_count = len(convoy.vehicles)
+            existing_convoy.vehicles.extend(convoy.vehicles)
+
+            return JSONResponse({
+                "status": "success",
+                "convoy_id": existing_convoy.id,
+                "convoy_name": existing_convoy.convoy_name,
+                "vehicle_count": existing_convoy.vehicle_count,
+                "new_vehicles_added": new_vehicle_count,
+                "total_load_kg": existing_convoy.total_load_kg,
+                "priority": existing_convoy.priority.value,
+                "message": f"Added {new_vehicle_count} vehicle(s) to existing convoy '{convoy.convoy_name}'"
+            })
+        else:
+            # Create new convoy
+            convoy_id_counter += 1
+            convoy.id = convoy_id_counter
+
+            # Check for duplicate registrations within the new convoy
+            registrations = [v.registration_number for v in convoy.vehicles]
+            if len(registrations) != len(set(registrations)):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Duplicate vehicle registration numbers in the same convoy"
+                )
+
+            # Store convoy by name
+            convoys_db[convoy.convoy_name] = convoy
+
+            return JSONResponse({
+                "status": "success",
+                "convoy_id": convoy.id,
+                "convoy_name": convoy.convoy_name,
+                "vehicle_count": convoy.vehicle_count,
+                "total_load_kg": convoy.total_load_kg,
+                "priority": convoy.priority.value,
+                "message": f"Convoy '{convoy.convoy_name}' created successfully"
+            })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/add-vehicle/{convoy_name}")
+def add_vehicle_to_convoy(convoy_name: str, vehicle: Vehicle):
+    """
+    Add a single vehicle to an existing convoy by convoy name.
+
+    NOTE: Vehicle automatically inherits source/destination from convoy.
+
+    Example JSON:
+    {
+      "vehicle_type": "truck",
+      "registration_number": "DL-01-AB-5678",
+      "load_type": "medical",
+      "load_weight_kg": 500,
+      "capacity_kg": 1000,
+      "driver_name": "Raj Kumar"
+    }
+    """
+    try:
+        # Find convoy by name
+        if convoy_name not in convoys_db:
+            raise HTTPException(status_code=404, detail=f"Convoy '{convoy_name}' not found")
+
+        convoy = convoys_db[convoy_name]
+
+        # Check if vehicle with same registration already exists
+        existing_registrations = {v.registration_number for v in convoy.vehicles}
+        if vehicle.registration_number in existing_registrations:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Vehicle with registration {vehicle.registration_number} already exists in convoy"
+            )
+
+        # Add vehicle to convoy
+        convoy.vehicles.append(vehicle)
 
         return JSONResponse({
             "status": "success",
@@ -59,9 +147,11 @@ def create_convoy(convoy: Convoy):
             "convoy_name": convoy.convoy_name,
             "vehicle_count": convoy.vehicle_count,
             "total_load_kg": convoy.total_load_kg,
-            "priority": convoy.priority,
-            "message": f"Convoy '{convoy.convoy_name}' created successfully"
+            "message": f"Vehicle {vehicle.registration_number} added to convoy '{convoy_name}'"
         })
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -90,10 +180,15 @@ def list_convoys():
 @router.get("/{convoy_id}")
 def get_convoy(convoy_id: int):
     """Get specific convoy details."""
-    if convoy_id not in convoys_db:
+    convoy = None
+    for c in convoys_db.values():
+        if c.id == convoy_id:
+            convoy = c
+            break
+
+    if not convoy:
         raise HTTPException(status_code=404, detail="Convoy not found")
 
-    convoy = convoys_db[convoy_id]
     return JSONResponse({
         "status": "success",
         "convoy": {
@@ -124,11 +219,16 @@ def get_convoy(convoy_id: int):
 @router.delete("/{convoy_id}")
 def delete_convoy(convoy_id: int):
     """Delete a convoy."""
-    if convoy_id not in convoys_db:
+    convoy_name = None
+    for name, c in convoys_db.items():
+        if c.id == convoy_id:
+            convoy_name = name
+            break
+
+    if not convoy_name:
         raise HTTPException(status_code=404, detail="Convoy not found")
 
-    convoy_name = convoys_db[convoy_id].convoy_name
-    del convoys_db[convoy_id]
+    del convoys_db[convoy_name]
 
     return JSONResponse({
         "status": "success",
@@ -158,8 +258,6 @@ def suggest_merge(convoy_a: Convoy, convoy_b: Convoy, max_extra_minutes: float =
           {
             "vehicle_type": "truck",
             "registration_number": "DL-01-AB-1234",
-            "source_lat": 28.6139, "source_lon": 77.2090,
-            "destination_lat": 28.4595, "destination_lon": 77.0266,
             "load_type": "medical",
             "load_weight_kg": 500,
             "capacity_kg": 1000
