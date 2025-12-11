@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Query, Body
 from fastapi.responses import JSONResponse
 import requests
+import time
 from typing import Optional, List, Union
 from pydantic import BaseModel
 
 router = APIRouter()
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
 
 
 def geocode_place(query: str) -> Optional[dict]:
@@ -19,10 +21,84 @@ def geocode_place(query: str) -> Optional[dict]:
         r.raise_for_status()
         data = r.json()
         if data and isinstance(data, list) and len(data) > 0:
-            return {"lat": float(data[0]["lat"]), "lon": float(data[0]["lon"]) }
+            return {"lat": float(data[0]["lat"]), "lon": float(data[0]["lon"]), "display_name": data[0].get("display_name", "")}
     except Exception as e:
         print("[GEOCODE] error", e)
     return None
+
+
+class GeocodingService:
+    """Service class for geocoding operations"""
+
+    @staticmethod
+    def geocode(address: str) -> Optional[dict]:
+        """
+        Convert an address to coordinates.
+        Returns: {'lat': float, 'lon': float, 'display_name': str, 'address': dict} or None
+        """
+        if not address:
+            return None
+
+        params = {"q": address, "format": "json", "limit": 1, "addressdetails": 1}
+        try:
+            r = requests.get(NOMINATIM_URL, params=params, timeout=5, headers={"User-Agent": "SmartConvoyAI/1.0"})
+            r.raise_for_status()
+            data = r.json()
+
+            if data and isinstance(data, list) and len(data) > 0:
+                result = data[0]
+                return {
+                    "lat": float(result["lat"]),
+                    "lon": float(result["lon"]),
+                    "display_name": result.get("display_name", ""),
+                    "address": result.get("address", {})
+                }
+        except Exception as e:
+            print(f"[GEOCODE] Error geocoding {address}: {e}")
+
+        return None
+
+    @staticmethod
+    def reverse_geocode(lat: float, lon: float) -> Optional[dict]:
+        """
+        Convert coordinates to address.
+        Returns: {'formatted': str, 'road': str, 'city': str, 'state': str, 'country': str, 'postcode': str} or None
+        """
+        params = {"lat": lat, "lon": lon, "format": "json"}
+        try:
+            r = requests.get(NOMINATIM_REVERSE_URL, params=params, timeout=5, headers={"User-Agent": "SmartConvoyAI/1.0"})
+            r.raise_for_status()
+            data = r.json()
+
+            if data and "address" in data:
+                address = data["address"]
+                return {
+                    "formatted": data.get("display_name", ""),
+                    "road": address.get("road", ""),
+                    "city": address.get("city") or address.get("town") or address.get("village", ""),
+                    "state": address.get("state", ""),
+                    "country": address.get("country", ""),
+                    "postcode": address.get("postcode", "")
+                }
+        except Exception as e:
+            print(f"[REVERSE_GEOCODE] Error reverse geocoding {lat},{lon}: {e}")
+
+        return None
+
+    @staticmethod
+    def batch_geocode(addresses: List[str]) -> List[Optional[dict]]:
+        """
+        Geocode multiple addresses with rate limiting.
+        Returns: List of geocoding results (can contain None for failed addresses)
+        """
+        results = []
+        for address in addresses:
+            result = GeocodingService.geocode(address)
+            results.append(result)
+            # Rate limiting: Nominatim requires 1 request per second
+            time.sleep(1)
+
+        return results
 
 
 @router.get("/route_from_places")

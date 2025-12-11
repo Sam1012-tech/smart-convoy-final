@@ -1,6 +1,6 @@
 # models/convoy.py
 from pydantic import BaseModel, validator
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 from enum import Enum
 
 
@@ -79,12 +79,6 @@ class Route(BaseModel):
     waypoints: List[Dict[str, float]]
     total_distance_km: float
     estimated_duration_minutes: float
-    checkpoints: Optional[List[Dict[str, Any]]] = None
-
-
-class Waypoint(BaseModel):
-    lat: float
-    lon: float
 
 
 class Convoy(BaseModel):
