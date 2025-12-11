@@ -1,5 +1,4 @@
 # routers/convoy_routes.py
-#final broooo
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from models.convoy import Convoy, Vehicle
@@ -10,6 +9,7 @@ from geocode_router import geocode_place
 from core.dynamic_router import dynamic_reroute
 import requests
 import json
+import time
 from typing import Optional
 from pydantic import BaseModel
 
@@ -41,22 +41,37 @@ def create_convoy(convoy: Convoy, current_user: dict = Depends(get_current_user)
     cur = conn.cursor()
 
     try:
-        # Geocode places if needed
+        # Geocode places if needed (Nominatim requires 1 request/second rate limit)
         if convoy.source_place and (convoy.source_lat is None or convoy.source_lon is None):
             s = geocode_place(convoy.source_place)
             if s:
                 convoy.source_lat = s["lat"]
                 convoy.source_lon = s["lon"]
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to geocode source location '{convoy.source_place}'. Please try a more specific address (e.g., 'New Delhi, India' instead of just 'Delhi')"
+                )
+            # Rate limit: wait 1 second before next geocode request
+            time.sleep(1)
 
         if convoy.destination_place and (convoy.destination_lat is None or convoy.destination_lon is None):
             d = geocode_place(convoy.destination_place)
             if d:
                 convoy.destination_lat = d["lat"]
                 convoy.destination_lon = d["lon"]
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to geocode destination location '{convoy.destination_place}'. Please try a more specific address (e.g., 'Mumbai, India' instead of just 'Mumbai')"
+                )
 
         # Validate coordinates exist
         if convoy.source_lat is None or convoy.source_lon is None or convoy.destination_lat is None or convoy.destination_lon is None:
-            raise HTTPException(status_code=400, detail="Convoy must include source and destination coordinates (lat/lon).")
+            raise HTTPException(
+                status_code=400,
+                detail="Convoy must include source and destination coordinates. Either provide place names for geocoding or provide lat/lon coordinates directly."
+            )
 
         # Insert convoy with created_by = user_id
         cur.execute("""
@@ -267,23 +282,33 @@ def list_convoys(current_user: dict = Depends(get_current_user)):
 # Get convoy details
 # ----------------------------
 @router.get("/{convoy_id}")
-def get_convoy(convoy_id: int):
+def get_convoy(convoy_id: int, current_user: dict = Depends(get_current_user)):
+    """
+    Get convoy details by ID.
+    Requires authentication - users can only access convoys they created.
+    """
+    user_id = current_user["user_id"]
+
     conn = get_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Database connection failed")
 
     cur = conn.cursor()
     try:
-        # Get convoy
+        # Get convoy and verify ownership
         cur.execute("""
             SELECT convoy_id, convoy_name, priority, source_place, destination_place,
-                   source_lat, source_lon, destination_lat, destination_lon, created_at
+                   source_lat, source_lon, destination_lat, destination_lon, created_at, created_by
             FROM convoys WHERE convoy_id=%s;
         """, (convoy_id,))
 
         rec = cur.fetchone()
         if not rec:
             raise HTTPException(status_code=404, detail="Convoy not found")
+
+        # Verify user owns this convoy
+        if rec["created_by"] != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: You can only view your own convoys")
 
         # Get vehicles
         cur.execute("""
@@ -350,17 +375,27 @@ def get_convoy(convoy_id: int):
 # Delete convoy
 # ----------------------------
 @router.delete("/{convoy_id}")
-def delete_convoy(convoy_id: int):
+def delete_convoy(convoy_id: int, current_user: dict = Depends(get_current_user)):
+    """
+    Delete a convoy by ID.
+    Requires authentication - users can only delete convoys they created.
+    """
+    user_id = current_user["user_id"]
+
     conn = get_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Database connection failed")
 
     cur = conn.cursor()
     try:
-        cur.execute("SELECT convoy_name FROM convoys WHERE convoy_id=%s;", (convoy_id,))
+        cur.execute("SELECT convoy_name, created_by FROM convoys WHERE convoy_id=%s;", (convoy_id,))
         rec = cur.fetchone()
         if not rec:
             raise HTTPException(status_code=404, detail="Convoy not found")
+
+        # Verify user owns this convoy
+        if rec["created_by"] != user_id:
+            raise HTTPException(status_code=403, detail="Access denied: You can only delete your own convoys")
 
         conv_name = rec["convoy_name"]
         cur.execute("DELETE FROM convoys WHERE convoy_id=%s;", (convoy_id,))
