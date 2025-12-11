@@ -81,6 +81,14 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [showMergePanel, setShowMergePanel] = useState(true);
 
+  // Route visualization state
+  const [selectedConvoyIds, setSelectedConvoyIds] = useState(new Set());
+  const [convoyRoutes, setConvoyRoutes] = useState({});
+  const [loadingRoutes, setLoadingRoutes] = useState({});
+  const routeLayers = useRef({});
+  const routeMarkers = useRef({});
+  const routeColors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
+
   // Fetch convoys function (can be reused for refresh)
   const fetchConvoys = async () => {
     try {
@@ -167,10 +175,223 @@ export default function Dashboard() {
   // Update markers and draw route when convoys change (omitted for brevity, assume it's correct)
   useEffect(() => {
     if (!mapRef.current) return;
-    
+
     // ... logic for clearing/adding markers and routes ...
-    
+
   }, [convoys]);
+
+  // Draw routes on the map when convoy routes are fetched
+  useEffect(() => {
+    if (!mapRef.current) return;
+
+    // Draw routes for selected convoys
+    selectedConvoyIds.forEach((convoyId, index) => {
+      const routeData = convoyRoutes[convoyId];
+      if (!routeData || !routeData.waypoints) return;
+
+      // Remove existing route layer if it exists
+      if (routeLayers.current[convoyId]) {
+        mapRef.current.removeLayer(routeLayers.current[convoyId]);
+      }
+
+      // Remove existing markers if they exist
+      if (routeMarkers.current[convoyId]) {
+        routeMarkers.current[convoyId].forEach(marker => {
+          mapRef.current.removeLayer(marker);
+        });
+      }
+
+      // Get color for this convoy
+      const color = routeColors[index % routeColors.length];
+
+      // Create route coordinates from waypoints
+      const routeCoords = routeData.waypoints.map(wp => [wp.lat, wp.lon]);
+
+      // Draw polyline
+      const polyline = L.polyline(routeCoords, {
+        color: color,
+        weight: 4,
+        opacity: 0.8
+      }).addTo(mapRef.current);
+
+      // Store layer reference
+      routeLayers.current[convoyId] = polyline;
+
+      // Add green marker for source (start point)
+      const sourceMarker = L.circleMarker(
+        [routeData.source.lat, routeData.source.lon],
+        {
+          radius: 8,
+          fillColor: '#10b981',
+          color: '#ffffff',
+          weight: 2,
+          opacity: 1,
+          fillOpacity: 0.9
+        }
+      ).addTo(mapRef.current);
+
+      const convoy = convoys.find(c => c.id === convoyId);
+      sourceMarker.bindPopup(`
+        <div style="font-family: sans-serif;">
+          <strong>${convoy?.convoy_name || 'Convoy'}</strong><br/>
+          <span style="color: #10b981;">● Source</span><br/>
+          ${convoy?.source?.place || 'Start Location'}
+        </div>
+      `);
+
+      // Add red marker for destination (end point)
+      const destMarker = L.circleMarker(
+        [routeData.destination.lat, routeData.destination.lon],
+        {
+          radius: 8,
+          fillColor: '#ef4444',
+          color: '#ffffff',
+          weight: 2,
+          opacity: 1,
+          fillOpacity: 0.9
+        }
+      ).addTo(mapRef.current);
+
+      destMarker.bindPopup(`
+        <div style="font-family: sans-serif;">
+          <strong>${convoy?.convoy_name || 'Convoy'}</strong><br/>
+          <span style="color: #ef4444;">● Destination</span><br/>
+          ${convoy?.destination?.place || 'End Location'}
+        </div>
+      `);
+
+      // Store marker references
+      routeMarkers.current[convoyId] = [sourceMarker, destMarker];
+
+      // Fit map to show all selected routes
+      if (selectedConvoyIds.size === 1) {
+        mapRef.current.fitBounds(polyline.getBounds(), { padding: [50, 50] });
+      }
+    });
+
+    // Clean up routes and markers that are no longer selected
+    Object.keys(routeLayers.current).forEach(convoyId => {
+      if (!selectedConvoyIds.has(parseInt(convoyId))) {
+        mapRef.current.removeLayer(routeLayers.current[convoyId]);
+        delete routeLayers.current[convoyId];
+      }
+    });
+
+    Object.keys(routeMarkers.current).forEach(convoyId => {
+      if (!selectedConvoyIds.has(parseInt(convoyId))) {
+        routeMarkers.current[convoyId].forEach(marker => {
+          mapRef.current.removeLayer(marker);
+        });
+        delete routeMarkers.current[convoyId];
+      }
+    });
+  }, [convoyRoutes, selectedConvoyIds, convoys]);
+
+  // Fetch route for a specific convoy
+  const fetchConvoyRoute = async (convoyId) => {
+    setLoadingRoutes(prev => ({ ...prev, [convoyId]: true }));
+    try {
+      const token = localStorage.getItem('access_token');
+
+      // First, try the convoy route endpoint
+      const res = await fetch(`http://localhost:8000/api/convoys/${convoyId}/route`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        console.log(`Route data for convoy ${convoyId}:`, data);
+
+        // Check if we got a proper route (more than 2 waypoints means it's not a straight line)
+        if (data.waypoints && data.waypoints.length > 2) {
+          setConvoyRoutes(prev => ({
+            ...prev,
+            [convoyId]: data
+          }));
+        } else {
+          // Straight line detected - OSRM may be down
+          console.warn(`⚠️ Only ${data.waypoints?.length || 0} waypoints received for convoy ${convoyId}. OSRM routing service may be unavailable.`);
+          console.log(`Attempting fallback route fetch from route_visualization endpoint...`);
+          const convoy = convoys.find(c => c.id === convoyId);
+
+          if (convoy) {
+            const osrmRes = await fetch(
+              `http://localhost:8000/api/routes/get_route?start_lat=${convoy.source_lat}&start_lon=${convoy.source_lon}&end_lat=${convoy.destination_lat}&end_lon=${convoy.destination_lon}&traffic_level=1&terrain=plain`
+            );
+
+            if (osrmRes.ok) {
+              const osrmData = await osrmRes.json();
+              console.log(`OSRM route data for convoy ${convoyId}:`, osrmData);
+
+              if (osrmData.status === 'success' && osrmData.route.coordinates) {
+                // Convert OSRM format to our format
+                const waypoints = osrmData.route.coordinates.map(coord => ({
+                  lat: coord[0],
+                  lon: coord[1]
+                }));
+
+                setConvoyRoutes(prev => ({
+                  ...prev,
+                  [convoyId]: {
+                    ...data,
+                    waypoints: waypoints
+                  }
+                }));
+              } else {
+                // Use the straight line if OSRM also fails
+                setConvoyRoutes(prev => ({
+                  ...prev,
+                  [convoyId]: data
+                }));
+              }
+            } else {
+              // Use the straight line from first endpoint
+              setConvoyRoutes(prev => ({
+                ...prev,
+                [convoyId]: data
+              }));
+            }
+          }
+        }
+      } else {
+        console.error(`Failed to fetch route for convoy ${convoyId}:`, res.status);
+      }
+    } catch (err) {
+      console.error(`Error fetching route for convoy ${convoyId}:`, err);
+    } finally {
+      setLoadingRoutes(prev => ({ ...prev, [convoyId]: false }));
+    }
+  };
+
+  // Handle checkbox toggle for route display
+  const handleConvoyCheckbox = (convoyId, isChecked) => {
+    const newSelected = new Set(selectedConvoyIds);
+
+    if (isChecked) {
+      newSelected.add(convoyId);
+      if (!convoyRoutes[convoyId]) {
+        fetchConvoyRoute(convoyId);
+      }
+    } else {
+      newSelected.delete(convoyId);
+      // Remove route from map
+      if (routeLayers.current[convoyId]) {
+        mapRef.current?.removeLayer(routeLayers.current[convoyId]);
+        delete routeLayers.current[convoyId];
+      }
+      // Remove markers from map
+      if (routeMarkers.current[convoyId]) {
+        routeMarkers.current[convoyId].forEach(marker => {
+          mapRef.current?.removeLayer(marker);
+        });
+        delete routeMarkers.current[convoyId];
+      }
+    }
+
+    setSelectedConvoyIds(newSelected);
+  };
 
   // Suggest merge handler
   const suggestMerge = async () => {
@@ -333,36 +554,94 @@ export default function Dashboard() {
                     </button>
                   </div>
                 ) : (
-                  convoys.map((convoy) => (
-                    <div
-                      key={convoy.id}
-                      onClick={() => navigate(`/route/${convoy.id}`)}
-                      className="p-5 hover:bg-slate-700/50 cursor-pointer transition-colors"
-                    >
-                      <div className="flex justify-between items-start mb-3">
-                        <div className="flex-1">
-                          <h3 className="text-white font-semibold text-base mb-2">{convoy.convoy_name}</h3>
-                          <div className="bg-slate-900/50 rounded px-3 py-2 mb-2 border border-slate-700">
-                            <div className="flex items-center gap-2 text-xs">
-                              <span className="text-green-400 font-medium">{convoy.source?.place || 'Source'}</span>
-                              <span className="text-slate-600">→</span>
-                              <span className="text-red-400 font-medium">{convoy.destination?.place || 'Destination'}</span>
+                  convoys.map((convoy, idx) => {
+                    const isSelected = selectedConvoyIds.has(convoy.id);
+                    const routeColor = routeColors[Array.from(selectedConvoyIds).indexOf(convoy.id) % routeColors.length];
+                    const isLoadingRoute = loadingRoutes[convoy.id];
+
+                    return (
+                      <div
+                        key={convoy.id}
+                        className="p-5 hover:bg-slate-700/50 transition-colors"
+                      >
+                        <div className="flex gap-3 items-start mb-3">
+                          {/* Checkbox for route display */}
+                          <div className="pt-1">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                handleConvoyCheckbox(convoy.id, e.target.checked);
+                              }}
+                              className="w-4 h-4 rounded border-slate-600 text-blue-600 focus:ring-blue-500 focus:ring-offset-slate-800 cursor-pointer"
+                              style={{ accentColor: isSelected ? routeColor : undefined }}
+                              title="Show route on map"
+                              disabled={isLoadingRoute}
+                            />
+                          </div>
+
+                          {/* Convoy info - clickable to view details */}
+                          <div
+                            onClick={() => navigate(`/route/${convoy.id}`)}
+                            className="flex-1 cursor-pointer"
+                          >
+                            <div className="flex justify-between items-start mb-2">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <h3 className="text-white font-semibold text-base">{convoy.convoy_name}</h3>
+                                  {isLoadingRoute && (
+                                    <span className="text-xs text-slate-400 italic">Loading route...</span>
+                                  )}
+                                </div>
+                                <div className="bg-slate-900/50 rounded px-3 py-2 mb-2 border border-slate-700">
+                                  <div className="flex items-center gap-2 text-xs">
+                                    <span className="text-green-400 font-medium">{convoy.source?.place || 'Source'}</span>
+                                    <span className="text-slate-600">→</span>
+                                    <span className="text-red-400 font-medium">{convoy.destination?.place || 'Destination'}</span>
+                                  </div>
+                                </div>
+                                <div className="flex gap-3 text-sm text-slate-400">
+                                  <span>🚚 {convoy.vehicle_count} vehicles</span>
+                                  <span>📦 {convoy.total_load_kg} kg</span>
+                                </div>
+                              </div>
+                              <div className={`px-2 py-1 rounded-full border text-xs font-medium ${getPriorityColor(convoy.priority)}`}>
+                                {convoy.priority}
+                              </div>
                             </div>
                           </div>
-                          <div className="flex gap-3 text-sm text-slate-400">
-                            <span>🚚 {convoy.vehicle_count} vehicles</span>
-                            <span>📦 {convoy.total_load_kg} kg</span>
-                          </div>
-                        </div>
-                        <div className={`px-2 py-1 rounded-full border text-xs font-medium ${getPriorityColor(convoy.priority)}`}>
-                          {convoy.priority}
                         </div>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>
+
+            {/* Route Legend - only show when routes are selected */}
+            {selectedConvoyIds.size > 0 && (
+              <div className="bg-slate-800 rounded-lg border border-slate-700 p-4">
+                <h3 className="text-white font-semibold mb-3 text-sm">Route Legend</h3>
+                <div className="space-y-2">
+                  {Array.from(selectedConvoyIds).map((convoyId, index) => {
+                    const convoy = convoys.find(c => c.id === convoyId);
+                    const color = routeColors[index % routeColors.length];
+                    return (
+                      <div key={convoyId} className="flex items-center gap-2">
+                        <div
+                          className="w-8 h-1 rounded-full"
+                          style={{ backgroundColor: color }}
+                        />
+                        <span className="text-slate-300 text-xs truncate flex-1">
+                          {convoy?.convoy_name || `Convoy ${convoyId}`}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className="bg-slate-800 rounded-lg border border-slate-700 p-4">
               <h3 className="text-white font-semibold mb-2">Convoy Summary</h3>
