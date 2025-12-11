@@ -24,6 +24,9 @@ export default function ConvoyHistory() {
   const [addingVehicle, setAddingVehicle] = useState(false);
   const [vehicleError, setVehicleError] = useState('');
   const [vehicleSuccess, setVehicleSuccess] = useState('');
+  const [deleteConfirmModal, setDeleteConfirmModal] = useState(false);
+  const [convoyToDelete, setConvoyToDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchConvoys = async () => {
     try {
@@ -134,6 +137,41 @@ export default function ConvoyHistory() {
     }
   };
 
+  const openDeleteConfirmModal = (convoy, e) => {
+    e.stopPropagation();
+    setConvoyToDelete(convoy);
+    setDeleteConfirmModal(true);
+  };
+
+  const handleDeleteConvoy = async () => {
+    if (!convoyToDelete) return;
+
+    setDeleting(true);
+    try {
+      const token = localStorage.getItem('access_token');
+      const res = await fetch(`http://localhost:8000/api/convoys/${convoyToDelete.id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Error: ${res.status}`);
+      }
+
+      setDeleteConfirmModal(false);
+      setConvoyToDelete(null);
+      fetchConvoys();
+    } catch (err) {
+      console.error('Delete convoy error:', err);
+      alert(err.message || 'Failed to delete convoy');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
       <Navbar />
@@ -220,13 +258,22 @@ export default function ConvoyHistory() {
                   </div>
                 </div>
 
-                <button
-                  onClick={(e) => openAddVehicleModal(convoy, e)}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors text-sm"
-                >
-                  <Plus className="w-4 h-4" />
-                  Add Vehicle
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={(e) => openAddVehicleModal(convoy, e)}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors text-sm"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add Vehicle
+                  </button>
+                  <button
+                    onClick={(e) => openDeleteConfirmModal(convoy, e)}
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors text-sm"
+                    title="Delete convoy"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             ))
           )}
@@ -371,6 +418,72 @@ export default function ConvoyHistory() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmModal && convoyToDelete && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 rounded-lg border border-red-500/30 max-w-md w-full p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center">
+                <Trash2 className="w-6 h-6 text-red-400" />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-white">Delete Convoy</h2>
+                <p className="text-sm text-slate-400">This action cannot be undone</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-900/50 rounded-lg p-4 mb-6 border border-slate-700">
+              <p className="text-white font-medium mb-2">{convoyToDelete.convoy_name}</p>
+              <div className="text-sm text-slate-400 space-y-1">
+                <div className="flex justify-between">
+                  <span>Convoy ID:</span>
+                  <span className="text-white">#{convoyToDelete.id}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Vehicles:</span>
+                  <span className="text-white">{convoyToDelete.vehicle_count}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Total Load:</span>
+                  <span className="text-white">{convoyToDelete.total_load_kg} kg</span>
+                </div>
+              </div>
+            </div>
+
+            <p className="text-slate-300 text-sm mb-6">
+              Are you sure you want to delete this convoy? All associated vehicles and route data will be permanently removed.
+            </p>
+
+            <div className="flex gap-3">
+              <button
+                onClick={handleDeleteConvoy}
+                disabled={deleting}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-semibold rounded-lg transition-colors"
+              >
+                {deleting ? (
+                  'Deleting...'
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    Delete Convoy
+                  </>
+                )}
+              </button>
+              <button
+                onClick={() => {
+                  setDeleteConfirmModal(false);
+                  setConvoyToDelete(null);
+                }}
+                disabled={deleting}
+                className="px-4 py-3 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white font-semibold rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
