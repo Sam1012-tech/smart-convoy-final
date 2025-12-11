@@ -1,4 +1,4 @@
-# 🚚 Smart Convoy Management System
+# 🚚 Smart Convoy Management System 
 
 A full-stack web application for managing military/logistics convoys with real-time route optimization, vehicle tracking, and convoy merging suggestions.
 
@@ -372,7 +372,10 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 👥 Authors
 
-- Your Name - Initial work
+- Sreeya Chand
+- Samyukthaa M
+- Prapti
+- Aniksha Anithan
 
 ## 🙏 Acknowledgments
 
@@ -385,8 +388,8 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 📧 Support
 
-For support, email your-email@example.com or open an issue on GitHub.
+For support, open an issue on GitHub.
 
 ---
 
-**Made with ❤️ for efficient convoy management**
+**Made with ❤️ for efficient convoy management by Team Delusion**
