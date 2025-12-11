@@ -26,15 +26,30 @@ export default function ViewRoute() {
           const data = await res.json();
           setConvoy(data.convoy);
 
-          // Fetch optimized route
-          if (data.convoy.source_lat && data.convoy.source_lon && data.convoy.destination_lat && data.convoy.destination_lon) {
+          // Fetch optimized route using the convoy route endpoint
+          if (data.convoy.id) {
             const routeRes = await fetch(
-              `http://localhost:8000/api/routes/get_route?start_lat=${data.convoy.source_lat}&start_lon=${data.convoy.source_lon}&end_lat=${data.convoy.destination_lat}&end_lon=${data.convoy.destination_lon}&traffic_level=1&terrain=plain`
+              `http://localhost:8000/api/convoys/${data.convoy.id}/route`,
+              {
+                headers: token ? {
+                  'Authorization': `Bearer ${token}`
+                } : {}
+              }
             );
             if (routeRes.ok) {
               const routeData = await routeRes.json();
               if (routeData.status === 'success') {
-                setRoute(routeData.route);
+                // Convert waypoints from [{lat, lon}] to [[lat, lon]] format for Leaflet
+                const coordinates = (routeData.waypoints || []).map(wp => [wp.lat, wp.lon]);
+
+                setRoute({
+                  coordinates: coordinates,
+                  distance_km: routeData.distance_km || (routeData.distance_m ? routeData.distance_m / 1000 : 0),
+                  duration_minutes: routeData.duration_minutes || (routeData.eta_seconds ? routeData.eta_seconds / 60 : 0),
+                  checkpoints: [],
+                  departure_time: 'N/A',
+                  estimated_arrival: 'N/A'
+                });
               }
             }
           }
