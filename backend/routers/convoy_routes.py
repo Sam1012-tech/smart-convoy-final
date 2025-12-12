@@ -73,6 +73,14 @@ def create_convoy(convoy: Convoy, current_user: dict = Depends(get_current_user)
                 detail="Convoy must include source and destination coordinates. Either provide place names for geocoding or provide lat/lon coordinates directly."
             )
 
+        # Validate each vehicle's load vs capacity
+        for idx, v in enumerate(convoy.vehicles, 1):
+            if v.load_weight_kg > v.capacity_kg:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Vehicle {idx} ({v.registration_number}): Load ({v.load_weight_kg:.2f} kg) exceeds capacity ({v.capacity_kg:.2f} kg). Please reduce load by {(v.load_weight_kg - v.capacity_kg):.2f} kg."
+                )
+
         # Insert convoy with created_by = user_id
         cur.execute("""
             INSERT INTO convoys
