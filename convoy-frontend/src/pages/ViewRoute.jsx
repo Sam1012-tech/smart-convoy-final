@@ -10,6 +10,8 @@ export default function ViewRoute() {
   const id = convoyId;
   const [convoy, setConvoy] = useState(null);
   const [route, setRoute] = useState(null);
+  const [checkpoints, setCheckpoints] = useState([]);
+  const [dangerPoints, setDangerPoints] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -26,10 +28,10 @@ export default function ViewRoute() {
           const data = await res.json();
           setConvoy(data.convoy);
 
-          // Fetch optimized route using the convoy route endpoint
-          if (data.convoy.id) {
+          // Fetch route with risk detection using get_route endpoint
+          if (data.convoy.source_lat && data.convoy.source_lon && data.convoy.destination_lat && data.convoy.destination_lon) {
             const routeRes = await fetch(
-              `http://localhost:8000/api/convoys/${data.convoy.id}/route`,
+              `http://localhost:8000/api/routes/get_route?start_lat=${data.convoy.source_lat}&start_lon=${data.convoy.source_lon}&end_lat=${data.convoy.destination_lat}&end_lon=${data.convoy.destination_lon}&traffic_level=1&terrain=plain`,
               {
                 headers: token ? {
                   'Authorization': `Bearer ${token}`
@@ -38,18 +40,37 @@ export default function ViewRoute() {
             );
             if (routeRes.ok) {
               const routeData = await routeRes.json();
-              if (routeData.status === 'success') {
-                // Convert waypoints from [{lat, lon}] to [[lat, lon]] format for Leaflet
-                const coordinates = (routeData.waypoints || []).map(wp => [wp.lat, wp.lon]);
-
+              if (routeData.status === 'success' && routeData.route) {
                 setRoute({
-                  coordinates: coordinates,
-                  distance_km: routeData.distance_km || (routeData.distance_m ? routeData.distance_m / 1000 : 0),
-                  duration_minutes: routeData.duration_minutes || (routeData.eta_seconds ? routeData.eta_seconds / 60 : 0),
-                  checkpoints: [],
-                  departure_time: 'N/A',
-                  estimated_arrival: 'N/A'
+                  coordinates: routeData.route.coordinates || [],
+                  distance_km: routeData.route.distance_km || 0,
+                  duration_minutes: routeData.route.duration_minutes || 0,
+                  checkpoints: routeData.checkpoints || [],
+                  departure_time: routeData.route.departure_time || 'N/A',
+                  estimated_arrival: routeData.route.estimated_arrival || 'N/A'
                 });
+
+                // Set danger points from risk analysis
+                if (routeData.danger_points) {
+                  setDangerPoints(routeData.danger_points);
+                  console.log('Danger points detected:', routeData.danger_points.length);
+                }
+
+                // Fetch checkpoints along the route
+                const checkpointsRes = await fetch(
+                  `http://localhost:8000/api/checkpoints/route/${data.convoy.id}?max_distance_km=15`,
+                  {
+                    headers: token ? {
+                      'Authorization': `Bearer ${token}`
+                    } : {}
+                  }
+                );
+                if (checkpointsRes.ok) {
+                  const checkpointsData = await checkpointsRes.json();
+                  if (checkpointsData.status === 'success') {
+                    setCheckpoints(checkpointsData.checkpoints || []);
+                  }
+                }
               }
             }
           }
@@ -172,13 +193,182 @@ export default function ViewRoute() {
         {/* Map Section */}
         {route && (
           <div className="mb-8">
-            <h2 className="text-lg font-semibold text-white mb-4">Route Map</h2>
+            <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+              Route Map
+              {dangerPoints.length > 0 && (
+                <span className="text-sm text-red-400 bg-red-500/10 px-3 py-1 rounded-full border border-red-500/30">
+                  {dangerPoints.length} Risk Zone{dangerPoints.length !== 1 ? 's' : ''} Detected
+                </span>
+              )}
+            </h2>
             <ConvoyMap
               route={route.coordinates || []}
               startPoint={{ lat: convoy.source_lat, lon: convoy.source_lon }}
               endPoint={{ lat: convoy.destination_lat, lon: convoy.destination_lon }}
-              checkpoints={route.checkpoints || []}
+              checkpoints={checkpoints}
+              dangerPoints={dangerPoints}
             />
+          </div>
+        )}
+
+        {/* Route Optimization Summary */}
+        {route && (
+          <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 mb-8">
+            <h3 className="text-white font-bold text-xl mb-4 flex items-center gap-2">
+              <svg className="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Route Optimization Summary
+            </h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Direct Route */}
+              <div className="border border-slate-700 rounded-lg p-4 bg-slate-900/50">
+                <div className="text-slate-400 text-sm font-medium mb-3">Direct Route (Baseline)</div>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Distance:</span>
+                    <span className="text-slate-300">{(() => {
+                      // Calculate straight-line distance using Haversine
+                      const R = 6371; // Earth's radius in km
+                      const dLat = (convoy.destination_lat - convoy.source_lat) * Math.PI / 180;
+                      const dLon = (convoy.destination_lon - convoy.source_lon) * Math.PI / 180;
+                      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                                Math.cos(convoy.source_lat * Math.PI / 180) * Math.cos(convoy.destination_lat * Math.PI / 180) *
+                                Math.sin(dLon/2) * Math.sin(dLon/2);
+                      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                      const directDistance = (R * c * 1.3).toFixed(1); // 1.3x for road factor
+                      return directDistance;
+                    })()} km</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Est. Time:</span>
+                    <span className="text-slate-300">{(() => {
+                      const R = 6371;
+                      const dLat = (convoy.destination_lat - convoy.source_lat) * Math.PI / 180;
+                      const dLon = (convoy.destination_lon - convoy.source_lon) * Math.PI / 180;
+                      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                                Math.cos(convoy.source_lat * Math.PI / 180) * Math.cos(convoy.destination_lat * Math.PI / 180) *
+                                Math.sin(dLon/2) * Math.sin(dLon/2);
+                      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                      const directDistance = R * c * 1.3;
+                      const directTime = (directDistance / 50 * 60).toFixed(0); // 50 km/h avg speed
+                      return directTime;
+                    })()} min</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Est. Fuel:</span>
+                    <span className="text-slate-300">~{(() => {
+                      const R = 6371;
+                      const dLat = (convoy.destination_lat - convoy.source_lat) * Math.PI / 180;
+                      const dLon = (convoy.destination_lon - convoy.source_lon) * Math.PI / 180;
+                      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                                Math.cos(convoy.source_lat * Math.PI / 180) * Math.cos(convoy.destination_lat * Math.PI / 180) *
+                                Math.sin(dLon/2) * Math.sin(dLon/2);
+                      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                      const directDistance = R * c * 1.3;
+                      const directFuel = (directDistance * 0.35).toFixed(1); // 0.35 L/km
+                      return directFuel;
+                    })()} L</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Optimized Route */}
+              <div className="border border-green-600 rounded-lg p-4 bg-green-900/10">
+                <div className="text-green-400 text-sm font-medium mb-3 flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                  Optimized Route (AI-Powered)
+                </div>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Distance:</span>
+                    <span className="text-green-400 font-medium">{route.distance_km.toFixed(1)} km
+                      <span className="text-green-300 ml-2">
+                        ({(() => {
+                          const R = 6371;
+                          const dLat = (convoy.destination_lat - convoy.source_lat) * Math.PI / 180;
+                          const dLon = (convoy.destination_lon - convoy.source_lon) * Math.PI / 180;
+                          const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                                    Math.cos(convoy.source_lat * Math.PI / 180) * Math.cos(convoy.destination_lat * Math.PI / 180) *
+                                    Math.sin(dLon/2) * Math.sin(dLon/2);
+                          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                          const directDistance = R * c * 1.3;
+                          const saved = directDistance - route.distance_km;
+                          return saved > 0 ? `-${saved.toFixed(1)} km ✓` : '+0 km';
+                        })()})
+                      </span>
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Est. Time:</span>
+                    <span className="text-green-400 font-medium">{route.duration_minutes.toFixed(0)} min
+                      <span className="text-green-300 ml-2">
+                        ({(() => {
+                          const R = 6371;
+                          const dLat = (convoy.destination_lat - convoy.source_lat) * Math.PI / 180;
+                          const dLon = (convoy.destination_lon - convoy.source_lon) * Math.PI / 180;
+                          const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                                    Math.cos(convoy.source_lat * Math.PI / 180) * Math.cos(convoy.destination_lat * Math.PI / 180) *
+                                    Math.sin(dLon/2) * Math.sin(dLon/2);
+                          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                          const directDistance = R * c * 1.3;
+                          const directTime = directDistance / 50 * 60;
+                          const savedTime = directTime - route.duration_minutes;
+                          return savedTime > 0 ? `-${savedTime.toFixed(0)} min ✓` : '+0 min';
+                        })()})
+                      </span>
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Est. Fuel:</span>
+                    <span className="text-green-400 font-medium">~{(route.distance_km * 0.35).toFixed(1)} L
+                      <span className="text-green-300 ml-2">
+                        ({(() => {
+                          const R = 6371;
+                          const dLat = (convoy.destination_lat - convoy.source_lat) * Math.PI / 180;
+                          const dLon = (convoy.destination_lon - convoy.source_lon) * Math.PI / 180;
+                          const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                                    Math.cos(convoy.source_lat * Math.PI / 180) * Math.cos(convoy.destination_lat * Math.PI / 180) *
+                                    Math.sin(dLon/2) * Math.sin(dLon/2);
+                          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                          const directDistance = R * c * 1.3;
+                          const directFuel = directDistance * 0.35;
+                          const savedFuel = directFuel - (route.distance_km * 0.35);
+                          const savedMoney = savedFuel * 150; // ₹150 per liter
+                          return savedFuel > 0 ? `-${savedFuel.toFixed(1)}L = ₹${savedMoney.toFixed(0)} ✓` : '+0L';
+                        })()})
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Overall Savings */}
+            <div className="mt-6 p-4 bg-green-900/20 border border-green-700 rounded-lg">
+              <div className="flex items-center justify-between">
+                <span className="text-green-400 font-bold text-lg">
+                  ✓ Optimization Benefits:
+                </span>
+                <span className="text-green-300 text-sm">
+                  {(() => {
+                    const R = 6371;
+                    const dLat = (convoy.destination_lat - convoy.source_lat) * Math.PI / 180;
+                    const dLon = (convoy.destination_lon - convoy.source_lon) * Math.PI / 180;
+                    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                              Math.cos(convoy.source_lat * Math.PI / 180) * Math.cos(convoy.destination_lat * Math.PI / 180) *
+                              Math.sin(dLon/2) * Math.sin(dLon/2);
+                    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                    const directDistance = R * c * 1.3;
+                    const savedPercent = ((directDistance - route.distance_km) / directDistance * 100);
+                    return savedPercent > 0 ? `${savedPercent.toFixed(1)}% more efficient than direct route` : 'Optimal route selected';
+                  })()}
+                </span>
+              </div>
+            </div>
           </div>
         )}
 
@@ -224,6 +414,118 @@ export default function ViewRoute() {
             </div>
           </div>
         </div>
+
+        {/* Risk Zones List */}
+        {dangerPoints.length > 0 && (
+          <div className="bg-slate-800 rounded-lg border border-red-700/50 overflow-hidden mb-8">
+            <div className="px-6 py-4 border-b border-red-700/50 bg-red-900/10">
+              <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-red-400" />
+                Risk Zones Detected ({dangerPoints.length})
+              </h2>
+              <p className="text-sm text-red-300 mt-1">
+                The route passes through or near the following risk zones. Exercise caution.
+              </p>
+            </div>
+
+            <div className="divide-y divide-slate-700">
+              {dangerPoints.map((danger, idx) => {
+                const getRiskColor = (level) => {
+                  if (level === 'high') return 'bg-red-600/20 text-red-400 border-red-500/30';
+                  if (level === 'medium') return 'bg-orange-600/20 text-orange-400 border-orange-500/30';
+                  return 'bg-yellow-600/20 text-yellow-400 border-yellow-500/30';
+                };
+
+                return (
+                  <div key={danger.id || idx} className="p-6 hover:bg-slate-700/30 transition-colors">
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <h3 className="text-white font-semibold mb-1">⚠️ {danger.name}</h3>
+                        <p className="text-slate-400 text-sm">Zone ID: {danger.id}</p>
+                      </div>
+                      <span className={`px-3 py-1 rounded-full border text-xs font-medium ${getRiskColor(danger.risk_level)}`}>
+                        {danger.risk_level.toUpperCase()} RISK
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                      <div>
+                        <p className="text-slate-400 mb-1">Distance from Route</p>
+                        <p className="text-white font-medium">{danger.distance_from_route_km} km</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-400 mb-1">Zone Radius</p>
+                        <p className="text-white font-medium">{danger.radius_km} km</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-400 mb-1">Coordinates</p>
+                        <p className="text-white font-mono text-xs">{danger.lat.toFixed(4)}, {danger.lon.toFixed(4)}</p>
+                      </div>
+                    </div>
+
+                    {danger.risk_level === 'high' && (
+                      <div className="mt-3 p-3 bg-red-900/20 border border-red-700/30 rounded text-xs text-red-300">
+                        <strong>⚠ High Risk Alert:</strong> Consider alternative routes or proceed with extreme caution.
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Checkpoints List */}
+        {checkpoints.length > 0 && (
+          <div className="bg-slate-800 rounded-lg border border-slate-700 overflow-hidden mb-8">
+            <div className="px-6 py-4 border-b border-slate-700">
+              <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                <MapPin className="w-5 h-5 text-blue-400" />
+                Checkpoints Along Route ({checkpoints.length})
+              </h2>
+            </div>
+
+            <div className="divide-y divide-slate-700">
+              {checkpoints.map((checkpoint, idx) => (
+                <div key={checkpoint.checkpoint_id} className="p-6 hover:bg-slate-700/30 transition-colors">
+                  <div className="flex justify-between items-start mb-3">
+                    <div>
+                      <h3 className="text-white font-semibold mb-1">{checkpoint.name}</h3>
+                      <p className="text-slate-400 text-sm">{checkpoint.description || 'Military checkpoint'}</p>
+                    </div>
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                      checkpoint.status === 'operational' ? 'bg-green-600/20 text-green-400' :
+                      checkpoint.status === 'congested' ? 'bg-yellow-600/20 text-yellow-400' :
+                      checkpoint.status === 'closed' ? 'bg-red-600/20 text-red-400' :
+                      'bg-slate-600/20 text-slate-400'
+                    }`}>
+                      {checkpoint.status}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div>
+                      <p className="text-slate-400 mb-1">Type</p>
+                      <p className="text-white font-medium capitalize">{checkpoint.checkpoint_type}</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-400 mb-1">Distance from Route</p>
+                      <p className="text-white font-medium">{checkpoint.distance_to_route_km} km</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-400 mb-1">Capacity</p>
+                      <p className="text-white font-medium">{checkpoint.current_load}/{checkpoint.capacity} vehicles</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-400 mb-1">Coordinates</p>
+                      <p className="text-white font-mono text-xs">{checkpoint.lat.toFixed(4)}, {checkpoint.lon.toFixed(4)}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Vehicles List */}
         <div className="bg-slate-800 rounded-lg border border-slate-700 overflow-hidden">

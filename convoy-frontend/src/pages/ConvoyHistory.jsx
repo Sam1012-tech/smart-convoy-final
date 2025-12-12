@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
-import { Filter, Plus, Trash2 } from 'lucide-react';
+import { Filter, Plus, Trash2, ChevronDown, ChevronUp, Truck, User, Package } from 'lucide-react';
 
 const VEHICLE_TYPES = ['truck', 'van', 'jeep', 'ambulance', 'tanker'];
 const LOAD_TYPES = ['medical', 'supplies', 'ammunition', 'fuel', 'personnel'];
@@ -27,6 +27,9 @@ export default function ConvoyHistory() {
   const [deleteConfirmModal, setDeleteConfirmModal] = useState(false);
   const [convoyToDelete, setConvoyToDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [expandedConvoys, setExpandedConvoys] = useState(new Set());
+  const [convoyVehicles, setConvoyVehicles] = useState({});
+  const [loadingVehicles, setLoadingVehicles] = useState({});
 
   const fetchConvoys = async () => {
     try {
@@ -46,6 +49,55 @@ export default function ConvoyHistory() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchConvoyVehicles = async (convoyId) => {
+    if (convoyVehicles[convoyId]) {
+      return; // Already fetched
+    }
+
+    setLoadingVehicles(prev => ({ ...prev, [convoyId]: true }));
+    try {
+      const token = localStorage.getItem('access_token');
+      const res = await fetch(`http://localhost:8000/api/convoys/${convoyId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setConvoyVehicles(prev => ({
+          ...prev,
+          [convoyId]: data.convoy?.vehicles || []
+        }));
+      }
+    } catch (err) {
+      console.error('Error fetching vehicles:', err);
+    } finally {
+      setLoadingVehicles(prev => ({ ...prev, [convoyId]: false }));
+    }
+  };
+
+  const toggleConvoyExpand = (convoyId) => {
+    const newExpanded = new Set(expandedConvoys);
+    if (newExpanded.has(convoyId)) {
+      newExpanded.delete(convoyId);
+    } else {
+      newExpanded.add(convoyId);
+      fetchConvoyVehicles(convoyId);
+    }
+    setExpandedConvoys(newExpanded);
+  };
+
+  const getVehicleStatusColor = (status) => {
+    const colors = {
+      idle: 'text-slate-400 bg-slate-500/10',
+      en_route: 'text-blue-400 bg-blue-500/10',
+      at_checkpoint: 'text-yellow-400 bg-yellow-500/10',
+      completed: 'text-green-400 bg-green-500/10',
+      breakdown: 'text-red-400 bg-red-500/10',
+    };
+    return colors[status] || colors.idle;
   };
 
   useEffect(() => {
@@ -217,65 +269,159 @@ export default function ConvoyHistory() {
               </button>
             </div>
           ) : (
-            filtered.map((convoy) => (
-              <div
-                key={convoy.id}
-                className="bg-slate-800 rounded-lg border border-slate-700 p-6 hover:border-slate-600 transition-colors"
-              >
-                <div className="flex justify-between items-start mb-4">
-                  <h3
-                    onClick={() => navigate(`/route/${convoy.id}`)}
-                    className="text-white font-semibold text-lg flex-1 cursor-pointer hover:text-blue-400 transition-colors"
-                  >
-                    {convoy.convoy_name}
-                  </h3>
-                  <div className={`px-3 py-1 rounded-full border text-xs font-medium ${getPriorityColor(convoy.priority)}`}>
-                    {convoy.priority}
-                  </div>
-                </div>
+            filtered.map((convoy) => {
+              const isExpanded = expandedConvoys.has(convoy.id);
+              const vehicles = convoyVehicles[convoy.id] || [];
+              const isLoadingVehicles = loadingVehicles[convoy.id];
 
-                <div className="space-y-3 text-slate-400 text-sm mb-4">
-                  <div className="bg-slate-900/50 rounded p-3 border border-slate-700">
-                    <div className="text-xs text-slate-500 mb-1">Route</div>
-                    <div className="flex items-center gap-2 text-slate-300">
-                      <span className="font-medium text-green-400">{convoy.source?.place || 'Source'}</span>
-                      <span className="text-slate-600">→</span>
-                      <span className="font-medium text-red-400">{convoy.destination?.place || 'Destination'}</span>
+              return (
+                <div
+                  key={convoy.id}
+                  className="bg-slate-800 rounded-lg border border-slate-700 hover:border-slate-600 transition-colors"
+                >
+                  <div className="p-6">
+                    <div className="flex justify-between items-start mb-4">
+                      <h3
+                        onClick={() => navigate(`/route/${convoy.id}`)}
+                        className="text-white font-semibold text-lg flex-1 cursor-pointer hover:text-blue-400 transition-colors"
+                      >
+                        {convoy.convoy_name}
+                      </h3>
+                      <div className={`px-3 py-1 rounded-full border text-xs font-medium ${getPriorityColor(convoy.priority)}`}>
+                        {convoy.priority}
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 text-slate-400 text-sm mb-4">
+                      <div className="bg-slate-900/50 rounded p-3 border border-slate-700">
+                        <div className="text-xs text-slate-500 mb-1">Route</div>
+                        <div className="flex items-center gap-2 text-slate-300">
+                          <span className="font-medium text-green-400">{convoy.source?.place || 'Source'}</span>
+                          <span className="text-slate-600">→</span>
+                          <span className="font-medium text-red-400">{convoy.destination?.place || 'Destination'}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-between">
+                        <span>Vehicles:</span>
+                        <span className="text-white font-medium">{convoy.vehicle_count}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Total Load:</span>
+                        <span className="text-white font-medium">{convoy.total_load_kg} kg</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Convoy ID:</span>
+                        <span className="text-white font-medium">#{convoy.id}</span>
+                      </div>
+                    </div>
+
+                    {/* Vehicle Details Toggle */}
+                    {convoy.vehicle_count > 0 && (
+                      <button
+                        onClick={() => toggleConvoyExpand(convoy.id)}
+                        className="w-full mb-3 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white font-medium rounded-lg transition-colors text-sm flex items-center justify-center gap-2"
+                      >
+                        {isExpanded ? (
+                          <>
+                            <ChevronUp className="w-4 h-4" />
+                            Hide Vehicle Details
+                          </>
+                        ) : (
+                          <>
+                            <ChevronDown className="w-4 h-4" />
+                            Show Vehicle Details ({convoy.vehicle_count})
+                          </>
+                        )}
+                      </button>
+                    )}
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={(e) => openAddVehicleModal(convoy, e)}
+                        className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors text-sm"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Add Vehicle
+                      </button>
+                      <button
+                        onClick={(e) => openDeleteConfirmModal(convoy, e)}
+                        className="flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors text-sm"
+                        title="Delete convoy"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   </div>
 
-                  <div className="flex justify-between">
-                    <span>Vehicles:</span>
-                    <span className="text-white font-medium">{convoy.vehicle_count}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Total Load:</span>
-                    <span className="text-white font-medium">{convoy.total_load_kg} kg</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Convoy ID:</span>
-                    <span className="text-white font-medium">#{convoy.id}</span>
-                  </div>
-                </div>
+                  {/* Expandable Vehicle Details */}
+                  {isExpanded && (
+                    <div className="border-t border-slate-700 p-6 bg-slate-900/30">
+                      <h4 className="text-white font-semibold mb-4 flex items-center gap-2">
+                        <Truck className="w-4 h-4" />
+                        Vehicle Details
+                      </h4>
 
-                <div className="flex gap-2">
-                  <button
-                    onClick={(e) => openAddVehicleModal(convoy, e)}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors text-sm"
-                  >
-                    <Plus className="w-4 h-4" />
-                    Add Vehicle
-                  </button>
-                  <button
-                    onClick={(e) => openDeleteConfirmModal(convoy, e)}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors text-sm"
-                    title="Delete convoy"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                      {isLoadingVehicles ? (
+                        <div className="text-center py-8 text-slate-400">Loading vehicles...</div>
+                      ) : vehicles.length === 0 ? (
+                        <div className="text-center py-8 text-slate-400">No vehicles found</div>
+                      ) : (
+                        <div className="space-y-3">
+                          {vehicles.map((vehicle, idx) => (
+                            <div
+                              key={idx}
+                              className="bg-slate-800 rounded-lg border border-slate-700 p-4 hover:border-slate-600 transition-colors"
+                            >
+                              <div className="flex items-start justify-between mb-3">
+                                <div className="flex items-center gap-2">
+                                  <Truck className="w-4 h-4 text-blue-400" />
+                                  <span className="text-white font-semibold">{vehicle.registration}</span>
+                                </div>
+                                <div className={`px-2 py-1 rounded text-xs font-medium ${getVehicleStatusColor(vehicle.status)}`}>
+                                  {vehicle.status.replace('_', ' ').toUpperCase()}
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-3 text-sm">
+                                <div className="flex items-center gap-2 text-slate-400">
+                                  <User className="w-3 h-3" />
+                                  <span>Driver: <span className="text-white">{vehicle.driver}</span></span>
+                                </div>
+                                <div className="flex items-center gap-2 text-slate-400">
+                                  <Truck className="w-3 h-3" />
+                                  <span>Type: <span className="text-white capitalize">{vehicle.type}</span></span>
+                                </div>
+                                <div className="flex items-center gap-2 text-slate-400">
+                                  <Package className="w-3 h-3" />
+                                  <span>Load: <span className="text-white capitalize">{vehicle.load_type}</span></span>
+                                </div>
+                                <div className="text-slate-400">
+                                  Weight: <span className="text-white">{vehicle.load_kg}/{vehicle.capacity_kg} kg</span>
+                                </div>
+                              </div>
+
+                              {/* Load Progress Bar */}
+                              <div className="mt-3">
+                                <div className="w-full bg-slate-700 rounded-full h-2">
+                                  <div
+                                    className="bg-blue-500 h-2 rounded-full transition-all"
+                                    style={{ width: `${Math.min(100, (vehicle.load_kg / vehicle.capacity_kg) * 100)}%` }}
+                                  />
+                                </div>
+                                <div className="text-xs text-slate-400 mt-1 text-right">
+                                  {((vehicle.load_kg / vehicle.capacity_kg) * 100).toFixed(1)}% capacity
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </main>
